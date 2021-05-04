@@ -9,7 +9,6 @@ if(NOT EXISTS "${CMAKE_BINARY_DIR}/conan.cmake")
     message(STATUS "Downloading conan.cmake from https://github.com/conan-io/cmake-conan")
     file(DOWNLOAD "https://raw.githubusercontent.com/conan-io/cmake-conan/develop/conan.cmake"
             "${CMAKE_BINARY_DIR}/conan.cmake"
-            EXPECTED_HASH SHA256=396e16d0f5eabdc6a14afddbcfff62a54a7ee75c6da23f32f7a31bc85db23484
             TLS_VERIFY ON)
 endif()
 
@@ -17,11 +16,7 @@ include(${CMAKE_BINARY_DIR}/conan.cmake)
 
 set(CMAKE_CXX_STANDARD 17)
 
-set(CONAN_GENERATOR cmake_find_package)
-
-if(MSVC OR XCODE)
-        set(CONAN_GENERATOR cmake_find_package_multi)
-endif()
+set(CONAN_GENERATOR cmake_find_package_multi)
 
 message(STATUS "Using conan generator ${CONAN_GENERATOR}")
 
