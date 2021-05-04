@@ -4,7 +4,6 @@
 #include <chrono>
 #include <cstdio>
 #include <algorithm>
-#include <execution>
 
 #include <gflags/gflags.h>
 #include <sqlite3.h>
@@ -114,7 +113,7 @@ std::vector<Block> Generate(Method method, size_t blocksCount)
             break;
     }
 
-    std::for_each (std::execution::par, output.begin (), output.end (), [generator, beg = &output[0]] (Block& blk) {
+    std::for_each (output.begin (), output.end (), [generator, beg = &output[0]] (Block& blk) {
         CreateBlock (blk, std::distance(beg, &blk) + 1, generator);
     });
 
