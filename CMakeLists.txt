@@ -62,6 +62,10 @@ if(WIN32)
         target_compile_definitions(SQliteBlockSize PRIVATE -D_USE_MATH_DEFINES)
 endif()
 
+if ("${CMAKE_CXX_COMPILER_ID}" STREQUAL "GNU")
+        target_link_libraries(SQliteBlockSize -ltbb -lpthread)
+endif()
+
 target_link_libraries(
     SQliteBlockSize
         fmt::fmt
