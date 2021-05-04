@@ -7,7 +7,7 @@ list(APPEND CMAKE_PREFIX_PATH ${CMAKE_BINARY_DIR})
 
 if(NOT EXISTS "${CMAKE_BINARY_DIR}/conan.cmake")
     message(STATUS "Downloading conan.cmake from https://github.com/conan-io/cmake-conan")
-    file(DOWNLOAD "https://raw.githubusercontent.com/conan-io/cmake-conan/v0.16.1/conan.cmake"
+    file(DOWNLOAD "https://raw.githubusercontent.com/conan-io/cmake-conan/develop/conan.cmake"
             "${CMAKE_BINARY_DIR}/conan.cmake"
             EXPECTED_HASH SHA256=396e16d0f5eabdc6a14afddbcfff62a54a7ee75c6da23f32f7a31bc85db23484
             TLS_VERIFY ON)
@@ -17,6 +17,14 @@ include(${CMAKE_BINARY_DIR}/conan.cmake)
 
 set(CMAKE_CXX_STANDARD 17)
 
+set(CONAN_GENERATOR cmake_find_package)
+
+if(MSVC OR XCODE)
+        set(CONAN_GENERATOR cmake_find_package_multi)
+endif()
+
+message(STATUS "Using conan generator ${CONAN_GENERATOR}")
+
 conan_cmake_configure(
         REQUIRES
             fmt/7.1.3
@@ -24,22 +32,41 @@ conan_cmake_configure(
             lz4/1.9.3
             snappy/1.1.8
             gflags/2.2.2
-        GENERATORS cmake_find_package)
+        GENERATORS ${CONAN_GENERATOR})
 
-conan_cmake_autodetect(settings)
+if(MSVC OR XCODE)
+        foreach(TYPE ${CMAKE_CONFIGURATION_TYPES})
+                message(STATUS "Configuring packages for ${TYPE}")
+                
+                conan_cmake_autodetect(settings BUILD_TYPE ${TYPE})
 
-conan_cmake_install(PATH_OR_REFERENCE .
-        BUILD missing
-        REMOTE conan-center
-        SETTINGS ${settings})
+                conan_cmake_install(PATH_OR_REFERENCE .
+                                BUILD missing
+                                REMOTE conan-center
+                                SETTINGS ${settings})
+        endforeach()
+else()
 
-find_package(fmt REQUIRED)
-find_package(SQLite3 REQUIRED)
-find_package(lz4 REQUIRED)
-find_package(Snappy REQUIRED)
-find_package(gflags REQUIRED)
+        conan_cmake_autodetect(settings)
+
+        conan_cmake_install(PATH_OR_REFERENCE .
+                BUILD missing
+                REMOTE conan-center
+                SETTINGS ${settings})
+endif()
+
+find_package(fmt CONFIG)
+find_package(SQLite3 CONFIG)
+find_package(lz4 CONFIG)
+find_package(Snappy CONFIG)
+find_package(gflags CONFIG)
 
 add_executable(SQliteBlockSize main.cpp)
+
+if(WIN32)
+        target_compile_definitions(SQliteBlockSize PRIVATE -D_USE_MATH_DEFINES)
+endif()
+
 target_link_libraries(
     SQliteBlockSize
         fmt::fmt
