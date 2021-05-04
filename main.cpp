@@ -3,6 +3,8 @@
 #include <cmath>
 #include <chrono>
 #include <cstdio>
+#include <algorithm>
+#include <execution>
 
 #include <gflags/gflags.h>
 #include <sqlite3.h>
@@ -112,8 +114,9 @@ std::vector<Block> Generate(Method method, size_t blocksCount)
             break;
     }
 
-    for (size_t i = 0; i < blocksCount; ++i)
-        CreateBlock (output[i], i + 1, generator);
+    std::for_each (std::execution::par, output.begin (), output.end (), [generator, beg = &output[0]] (Block& blk) {
+        CreateBlock (blk, std::distance(beg, &blk) + 1, generator);
+    });
 
     return output;
 }
@@ -228,9 +231,9 @@ struct StatementHandle
         return 0 == sqlite3_bind_double(Stmt, index, value);
     }
 
-    bool bind(int index, const void* data, int size) const
+    bool bind(int index, const void* data, int size, bool copyData) const
     {
-        return 0 == sqlite3_bind_blob(Stmt, index, data, size, SQLITE_STATIC);
+        return 0 == sqlite3_bind_blob(Stmt, index, data, size, copyData ? SQLITE_TRANSIENT : SQLITE_STATIC);
     }
 
     int exec () const
@@ -296,29 +299,29 @@ bool WriteBlock (const StatementHandle& handle, const Block& block, CompressionM
     if (!handle.bind(5, block.SumRMS))
         return false;
 
-    if (!handle.bind(6, block.Summary256, sizeof (block.Summary256)))
+    if (!handle.bind(6, block.Summary256, sizeof (block.Summary256), false))
         return false;
 
-    if (!handle.bind(7, block.Summary, sizeof (block.Summary)))
+    if (!handle.bind(7, block.Summary, sizeof (block.Summary), false))
         return false;
 
     if (method == CompressionMethod::Snappy)
     {
         std::string compressed = CompressSnappy (block.Data, sizeof (block.Data));
 
-        if (!handle.bind (8, compressed.data(), compressed.size()))
+        if (!handle.bind (8, compressed.data(), compressed.size(), true))
             return false;
     }
     else if (method == CompressionMethod::LZ4)
     {
         std::vector<char> compressed = CompressLZ4(block.Data, sizeof (block.Data));
 
-        if (!handle.bind (8, compressed.data(), compressed.size()))
+        if (!handle.bind (8, compressed.data(), compressed.size(), true))
             return false;
     }
     else
     {
-        if (!handle.bind (8, block.Data, sizeof (block.Data)))
+        if (!handle.bind (8, block.Data, sizeof (block.Data), false))
             return false;
     }
 
