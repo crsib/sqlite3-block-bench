@@ -1,4 +1,3 @@
-#include <iostream>
 #include <vector>
 #include <random>
 #include <cmath>
@@ -20,13 +19,13 @@ DEFINE_string(method, "mixed", "zero|random|sine");
 struct Block final
 {
     int BlockId;
-    int Format;
-    double SumMin;
-    double SumMax;
-    double SumRMS;
+    int Format { };
+    double SumMin { };
+    double SumMax { };
+    double SumRMS { };
 
-    uint8_t Summary256[12288];
-    uint8_t Summary[48];
+    uint8_t Summary256[12288] { };
+    uint8_t Summary[48] { };
 
     float Data[1024 * 1024 / sizeof (float)];
 
@@ -42,22 +41,12 @@ enum class Method
 };
 
 template<typename Generator>
-Block CreateBlock(int blockId, Generator gen)
+void CreateBlock(Block& blk, int blockId, Generator gen)
 {
-    Block blk = {
-            blockId,
-            1,
-            0.0,
-            0.0,
-            0.0,
-            {},
-            {}
-    };
+    blk.BlockId = blockId;
 
     for (size_t i = 0; i < Block::ValuesCount; ++i)
         blk.Data[i] = gen();
-
-    return blk;
 }
 
 float NextZero()
@@ -103,7 +92,7 @@ std::vector<Block> Generate(Method method, size_t blocksCount)
 {
     std::vector<Block> output;
 
-    output.reserve (blocksCount);
+    output.resize (blocksCount);
 
     float (*generator)();
 
@@ -124,7 +113,7 @@ std::vector<Block> Generate(Method method, size_t blocksCount)
     }
 
     for (size_t i = 0; i < blocksCount; ++i)
-        output.emplace_back(CreateBlock (i + 1, generator));
+        CreateBlock (output[i], i + 1, generator);
 
     return output;
 }
@@ -148,9 +137,7 @@ struct SQLiteHandle
     SQLiteHandle()
     {
         if (sqlite3_open ("test.sqlite3", &DB))
-        {
-            std::cout << sqlite3_errmsg (DB) << std::endl;
-        }
+            fmt::print ("SQLite error: {}", sqlite3_errmsg (DB));
     }
 
     ~SQLiteHandle()
@@ -166,7 +153,7 @@ struct SQLiteHandle
     {
         if (sqlite3_exec (DB, "PRAGMA journal_mode=WAL", nullptr, nullptr, nullptr))
         {
-            std::cout << sqlite3_errmsg(DB) << std::endl;
+            fmt::print ("SQLite error: {}", sqlite3_errmsg (DB));
             return false;
         }
 
@@ -175,7 +162,7 @@ struct SQLiteHandle
                           nullptr, nullptr, nullptr)
                 )
         {
-            std::cout << sqlite3_errmsg(DB) << std::endl;
+            fmt::print ("SQLite error: {}", sqlite3_errmsg (DB));
             return false;
         }
 
@@ -184,11 +171,11 @@ struct SQLiteHandle
                           nullptr, nullptr, nullptr)
                 )
         {
-            std::cout << sqlite3_errmsg(DB) << std::endl;
+            fmt::print ("SQLite error: {}", sqlite3_errmsg (DB));
             return false;
         }
 
-        const char* createSTMT = R"=(CREATE TABLE sampleblocks(
+       static const char* createSTMT = R"=(CREATE TABLE sampleblocks(
         blockid              INTEGER PRIMARY KEY AUTOINCREMENT,
         sampleformat         INTEGER,
         summin               REAL,
@@ -200,7 +187,7 @@ struct SQLiteHandle
 
         if (sqlite3_exec (DB, createSTMT, nullptr, nullptr, nullptr))
         {
-            std::cout << sqlite3_errmsg(DB) << std::endl;
+            fmt::print ("SQLite error: {}", sqlite3_errmsg (DB));
             return false;
         }
 
@@ -209,7 +196,7 @@ struct SQLiteHandle
 
     void logError()
     {
-        std::cout << sqlite3_errmsg(DB) << std::endl;
+        fmt::print ("SQLite error: {}", sqlite3_errmsg (DB));
     }
 };
 
@@ -221,7 +208,7 @@ struct StatementHandle
     {
         if (sqlite3_prepare_v2 (db, sql, -1, &Stmt, nullptr))
         {
-            std::cout << sqlite3_errmsg(db) << std::endl;
+            fmt::print ("SQLite error: {}", sqlite3_errmsg (db));
         }
     }
 
@@ -352,11 +339,13 @@ int main (int argc, char** argv)
 {
     gflags::ParseCommandLineFlags (&argc, &argv, true);
 
-    std::cout << "Comp: " <<
-        FLAGS_compression << " Meth: " <<
-        FLAGS_method << " Cache: " <<
-        FLAGS_cache_size << " Page: " <<
-      (1 << FLAGS_page_size_exp) << std::endl;
+    fmt::print (
+        "Method: {}, Compression: {}, Page size: {}, Cache size: {}\n", 
+        FLAGS_method, 
+        FLAGS_compression, 
+        (1 << FLAGS_page_size_exp), 
+        FLAGS_cache_size
+    );
 
     std::vector<Block> blocks = Generate (GetMethod (), FLAGS_blocks_count);
 
@@ -395,8 +384,6 @@ int main (int argc, char** argv)
             std::chrono::high_resolution_clock::now ();
 
     const double writeDuration = std::chrono::duration<double> (endWrite - startWrite).count();
-
-    std::cout << "\tWrite: " << writeDuration << " " <<   std::endl;
 
     fmt::print ("Write: {} s, {} block/s\n", writeDuration, FLAGS_blocks_count / writeDuration);
 
