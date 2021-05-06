@@ -21,45 +21,61 @@ set(CONAN_GENERATOR cmake_find_package_multi)
 message(STATUS "Using conan generator ${CONAN_GENERATOR}")
 
 conan_cmake_configure(
-        REQUIRES
-            fmt/7.1.3
-            sqlite3/3.35.5
-            lz4/1.9.3
-            snappy/1.1.8
-            gflags/2.2.2
-        GENERATORS ${CONAN_GENERATOR})
+    REQUIRES
+        fmt/7.1.3
+        sqlite3/3.35.5
+        lz4/1.9.3
+        snappy/1.1.8
+        benchmark/1.5.2
+    GENERATORS ${CONAN_GENERATOR}
+)
 
 if(MSVC OR XCODE)
-        foreach(TYPE ${CMAKE_CONFIGURATION_TYPES})
-                message(STATUS "Configuring packages for ${TYPE}")
-                
-                conan_cmake_autodetect(settings BUILD_TYPE ${TYPE})
-
-                conan_cmake_install(PATH_OR_REFERENCE .
-                                BUILD missing
-                                REMOTE conan-center
-                                SETTINGS ${settings})
-        endforeach()
-else()
-
-        conan_cmake_autodetect(settings)
+    foreach(TYPE ${CMAKE_CONFIGURATION_TYPES})
+        message(STATUS "Configuring packages for ${TYPE}")
+        
+        conan_cmake_autodetect(settings BUILD_TYPE ${TYPE})
 
         conan_cmake_install(PATH_OR_REFERENCE .
-                BUILD missing
-                REMOTE conan-center
-                SETTINGS ${settings})
+            BUILD missing
+            REMOTE conan-center
+            SETTINGS ${settings}
+        )
+    endforeach()
+else()
+    conan_cmake_autodetect(settings)
+
+    conan_cmake_install(PATH_OR_REFERENCE .
+        BUILD missing
+        REMOTE conan-center
+        SETTINGS ${settings}
+    )
 endif()
 
 find_package(fmt CONFIG)
 find_package(SQLite3 CONFIG)
 find_package(lz4 CONFIG)
 find_package(Snappy CONFIG)
-find_package(gflags CONFIG)
+find_package(benchmark CONFIG)
 
-add_executable(SQliteBlockSize main.cpp)
+add_executable(SQliteBlockSize 
+    main.cpp
+    
+    Block.h
+    Block.cpp
+
+    DBHandle.h
+    DBHandle.cpp
+
+    DBStatement.h
+    DBStatement.cpp
+
+    DataBuffer.h
+    DataBuffer.cpp
+)
 
 if(WIN32)
-        target_compile_definitions(SQliteBlockSize PRIVATE -D_USE_MATH_DEFINES)
+    target_compile_definitions(SQliteBlockSize PRIVATE -D_USE_MATH_DEFINES)
 endif()
 
 target_link_libraries(
@@ -68,5 +84,5 @@ target_link_libraries(
         SQLite::SQLite3
         lz4::lz4
         Snappy::snappy
-        gflags::gflags
+        benchmark::benchmark
 )

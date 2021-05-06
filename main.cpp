@@ -1,342 +1,85 @@
-#include <vector>
-#include <random>
-#include <cmath>
 #include <chrono>
 #include <cstdio>
 #include <algorithm>
 
-#include <gflags/gflags.h>
-#include <sqlite3.h>
 #include <fmt/format.h>
-#include <snappy.h>
-#include <lz4.h>
 
-DEFINE_string(compression, "off", "off|snappy|lz4");
-DEFINE_int32(page_size_exp, 12, "Page size exponent (2^page_size_exp)");
-DEFINE_int32(cache_size, 512, "Number of pages before commit");
-DEFINE_int32(blocks_count, 500, "Number of pages before commit");
-DEFINE_string(method, "mixed", "zero|random|sine");
+#include <benchmark/benchmark.h>
 
-struct Block final
+#include "Block.h"
+
+#include "DBHandle.h"
+#include "DBStatement.h"
+
+// 0 - page size
+// 1 - cache size in pages
+// 2 - compression method
+
+static void BM_Write (benchmark::State& state) 
 {
-    int BlockId;
-    int Format { };
-    double SumMin { };
-    double SumMax { };
-    double SumRMS { };
+    static std::vector<Block> blocks = Generate (Method::Mixed, 200);
 
-    uint8_t Summary256[12288] { };
-    uint8_t Summary[48] { };
+    size_t blocksProcessed = 0;
+    size_t bytesWritten = 0;
 
-    float Data[1024 * 1024 / sizeof (float)];
-
-    static constexpr size_t ValuesCount = sizeof (Data) / sizeof (Data[0]);
-};
-
-enum class Method
-{
-    Zero,
-    Random,
-    Sine,
-    Mixed,
-};
-
-template<typename Generator>
-void CreateBlock(Block& blk, int blockId, Generator gen)
-{
-    blk.BlockId = blockId;
-
-    for (size_t i = 0; i < Block::ValuesCount; ++i)
-        blk.Data[i] = gen();
-}
-
-float NextZero()
-{
-    return 0;
-}
-
-float NextRandom()
-{
-    static std::random_device r;
-    static std::seed_seq seed{r(), r(), r(), r(), r(), r(), r(), r()};
-    static std::mt19937 engine(seed);
-    static std::uniform_real_distribution<float> distrib(-1.0f, 1.0f);
-
-    return distrib (engine);
-}
-
-float NextSine()
-{
-    static int64_t i = 0;
-
-    return float (std::sin (M_PI_2 * i / 1000.0)) + (std::sin (M_PI_2 * i / 2000.0)) + (std::sin (M_PI_2 * i / 3000.0));
-}
-
-float NextMixed()
-{
-    static std::random_device r;
-    static std::seed_seq seed{r(), r(), r(), r(), r(), r(), r(), r()};
-    static std::mt19937 engine(seed);
-    static std::uniform_int_distribution<> distrib(0, 100);
-
-    const int value = distrib(engine);
-
-    if (value < 20)
-        return NextZero();
-    else if (value < 70 )
-        return NextSine();
-    else
-        return  NextRandom();
-}
-
-std::vector<Block> Generate(Method method, size_t blocksCount)
-{
-    std::vector<Block> output;
-
-    output.resize (blocksCount);
-
-    float (*generator)();
-
-    switch (method)
+    for (auto _ : state) 
     {
-        case Method::Zero:
-            generator = NextZero;
+        state.PauseTiming ();
+
+        DBHandle db (state.range (0), state.range (1));
+
+        if (!db)
+        {
+            state.SkipWithError ("DB setup failed");
             break;
-        case Method::Random:
-            generator = NextRandom;
+        }
+
+        std::unique_ptr<DBStatement> stmt = db.createStatement (R"=(
+        INSERT INTO
+            sampleblocks (blockid, sampleformat, summin, summax, sumrms, summary256, summary64k,samples)
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8))=");
+
+        if (!stmt)
+        {
+            state.SkipWithError ("Statement setup failed");
             break;
-        case Method::Sine:
-            generator = NextSine;
-            break;
-        case Method::Mixed:
-            generator = NextMixed;
-            break;
-    }
+        }
 
-    std::for_each (output.begin (), output.end (), [generator, beg = &output[0]] (Block& blk) {
-        CreateBlock (blk, std::distance(beg, &blk) + 1, generator);
-    });
+        state.ResumeTiming ();
 
-    return output;
-}
-
-Method GetMethod()
-{
-    if (FLAGS_method == "sine")
-        return Method::Sine;
-    else if (FLAGS_method == "random")
-        return  Method::Random;
-    else if (FLAGS_method == "mixed")
-        return  Method::Mixed;
-    else
-        return Method::Zero;
-}
-
-struct SQLiteHandle
-{
-    sqlite3* DB { nullptr };
-
-    SQLiteHandle()
-    {
-        if (sqlite3_open ("test.sqlite3", &DB))
-            fmt::print ("SQLite error: {}", sqlite3_errmsg (DB));
-    }
-
-    ~SQLiteHandle()
-    {
-        if (DB != nullptr)
+        for (const Block& block : blocks)
         {
-            sqlite3_close (DB);
-            std::remove ("test.sqlite3");
+            size_t written;
+
+            if (0 == (written = WriteBlock (block, *stmt, CompressionMethod (state.range (2)))))
+            {
+                state.SkipWithError ("Write failed");
+                break;
+            }
+
+            bytesWritten += written;
+            ++blocksProcessed;
         }
     }
 
-    bool SetupDB()
-    {
-        if (sqlite3_exec (DB, "PRAGMA journal_mode=WAL", nullptr, nullptr, nullptr))
-        {
-            fmt::print ("SQLite error: {}", sqlite3_errmsg (DB));
-            return false;
-        }
+    state.counters["Total Size"] = bytesWritten;
 
-        if (sqlite3_exec (DB,
-                          fmt::format ("PRAGMA page_size={}", 1 << FLAGS_page_size_exp).c_str(),
-                          nullptr, nullptr, nullptr)
-                )
-        {
-            fmt::print ("SQLite error: {}", sqlite3_errmsg (DB));
-            return false;
-        }
-
-        if (sqlite3_exec (DB,
-                          fmt::format ("PRAGMA cache_size={}", 1 << FLAGS_cache_size).c_str(),
-                          nullptr, nullptr, nullptr)
-                )
-        {
-            fmt::print ("SQLite error: {}", sqlite3_errmsg (DB));
-            return false;
-        }
-
-       static const char* createSTMT = R"=(CREATE TABLE sampleblocks(
-        blockid              INTEGER PRIMARY KEY AUTOINCREMENT,
-        sampleformat         INTEGER,
-        summin               REAL,
-        summax               REAL,
-        sumrms               REAL,
-        summary256           BLOB,
-        summary64k           BLOB,
-        samples              BLOB))=";
-
-        if (sqlite3_exec (DB, createSTMT, nullptr, nullptr, nullptr))
-        {
-            fmt::print ("SQLite error: {}", sqlite3_errmsg (DB));
-            return false;
-        }
-
-        return true;
-    }
-
-    void logError()
-    {
-        fmt::print ("SQLite error: {}", sqlite3_errmsg (DB));
-    }
-};
-
-struct StatementHandle
-{
-    sqlite3_stmt* Stmt {nullptr};
-
-    StatementHandle (sqlite3* db, const char* sql)
-    {
-        if (sqlite3_prepare_v2 (db, sql, -1, &Stmt, nullptr))
-        {
-            fmt::print ("SQLite error: {}", sqlite3_errmsg (db));
-        }
-    }
-
-    ~StatementHandle()
-    {
-        if (Stmt != nullptr)
-            sqlite3_finalize (Stmt);
-    }
-
-    bool bind(int index, int value) const
-    {
-        return 0 == sqlite3_bind_int(Stmt, index, value);
-    }
-
-    bool bind(int index, double value) const
-    {
-        return 0 == sqlite3_bind_double(Stmt, index, value);
-    }
-
-    bool bind(int index, const void* data, int size, bool copyData) const
-    {
-        return 0 == sqlite3_bind_blob(Stmt, index, data, size, copyData ? SQLITE_TRANSIENT : SQLITE_STATIC);
-    }
-
-    int exec () const
-    {
-        return sqlite3_step (Stmt);
-    }
-
-    int reset () const
-    {
-        return sqlite3_reset (Stmt);
-    }
-};
-
-enum class CompressionMethod
-{
-    None,
-    Snappy,
-    LZ4
-};
-
-std::string CompressSnappy(const void* data, size_t size)
-{
-    std::string result;
-
-    snappy::Compress (reinterpret_cast<const char*>(data), size, &result);
-
-    return result;
+    state.counters["Blocks"] = blocksProcessed;
+    state.counters["Blocks/s"] = benchmark::Counter (blocksProcessed, benchmark::Counter::kIsRate);
 }
 
-std::vector<char> CompressLZ4(const void* data, size_t size)
-{
-    std::vector<char> buffer;
-    buffer.resize (LZ4_compressBound(size));
+BENCHMARK (BM_Write)->ArgsProduct ({
+    // Page sizes
+    { 1 << 11, 1 << 12, 1 << 13, 1 << 14, 1 << 15, 1 << 16 },
+    // Cache size
+    { 128, 256, 512, 1024 },
+    // Compression 
+    { 0, 1, 2 }
+})->MinTime(2);
 
-    int bytes = LZ4_compress_default(
-        reinterpret_cast<const char*>(data),
-        buffer.data(),
-        size,
-        buffer.size()
-    );
+BENCHMARK_MAIN ();
 
-    buffer.erase (buffer.begin() + bytes, buffer.end());
-
-    return buffer;
-}
-
-bool WriteBlock (const StatementHandle& handle, const Block& block, CompressionMethod method)
-{
-    handle.reset();
-
-    if (!handle.bind(1, block.BlockId))
-        return false;
-
-    if (!handle.bind(2, block.Format))
-        return false;
-
-    if (!handle.bind(3, block.SumMin))
-        return false;
-
-    if (!handle.bind(4, block.SumMax))
-        return false;
-
-    if (!handle.bind(5, block.SumRMS))
-        return false;
-
-    if (!handle.bind(6, block.Summary256, sizeof (block.Summary256), false))
-        return false;
-
-    if (!handle.bind(7, block.Summary, sizeof (block.Summary), false))
-        return false;
-
-    if (method == CompressionMethod::Snappy)
-    {
-        std::string compressed = CompressSnappy (block.Data, sizeof (block.Data));
-
-        if (!handle.bind (8, compressed.data(), compressed.size(), true))
-            return false;
-    }
-    else if (method == CompressionMethod::LZ4)
-    {
-        std::vector<char> compressed = CompressLZ4(block.Data, sizeof (block.Data));
-
-        if (!handle.bind (8, compressed.data(), compressed.size(), true))
-            return false;
-    }
-    else
-    {
-        if (!handle.bind (8, block.Data, sizeof (block.Data), false))
-            return false;
-    }
-
-    return handle.exec() == SQLITE_DONE;
-}
-
-CompressionMethod GetCompressionMethod()
-{
-    if (FLAGS_compression == "snappy")
-        return CompressionMethod::Snappy;
-    else if (FLAGS_compression == "lz4")
-        return CompressionMethod::LZ4;
-    else
-        return CompressionMethod::None;
-}
-
+/*
 int main (int argc, char** argv)
 {
     gflags::ParseCommandLineFlags (&argc, &argv, true);
@@ -359,12 +102,12 @@ int main (int argc, char** argv)
     if (!handle.SetupDB ())
         return 2;
 
-    StatementHandle writeStatement(handle.DB, R"=(INSERT INTO
+    DBStatement writeStatement(handle.DB, R"=(INSERT INTO
         sampleblocks (blockid, sampleformat,summin, summax, sumrms, summary256, summary64k,samples)
         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8))="
     );
 
-    if (writeStatement.Stmt == nullptr)
+    if (writeStatement.mStmt == nullptr)
     {
         handle.logError ();
         return 3;
@@ -391,3 +134,4 @@ int main (int argc, char** argv)
 
     return 0;
 }
+*/
