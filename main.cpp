@@ -11,13 +11,16 @@
 #include "DBHandle.h"
 #include "DBStatement.h"
 
-// 0 - page size
-// 1 - cache size in pages
-// 2 - compression method
+// 0 - compression method
+// 1 - page size
+// 2 - cache size in pages
+
 
 static void BM_Write (benchmark::State& state) 
 {
     static std::vector<Block> blocks = Generate (Method::Mixed, 200);
+
+    const CompressionMethod method = CompressionMethod (state.range (0));
 
     size_t blocksProcessed = 0;
     size_t bytesWritten = 0;
@@ -26,7 +29,7 @@ static void BM_Write (benchmark::State& state)
     {
         state.PauseTiming ();
 
-        DBHandle db (state.range (0), state.range (1));
+        DBHandle db (state.range (1), state.range (2));
 
         if (!db)
         {
@@ -51,7 +54,7 @@ static void BM_Write (benchmark::State& state)
         {
             size_t written;
 
-            if (0 == (written = WriteBlock (block, *stmt, CompressionMethod (state.range (2)))))
+            if (0 == (written = WriteBlock (block, *stmt, method)))
             {
                 state.SkipWithError ("Write failed");
                 break;
@@ -69,12 +72,12 @@ static void BM_Write (benchmark::State& state)
 }
 
 BENCHMARK (BM_Write)->ArgsProduct ({
+    // Compression 
+    { 0, 1, 2 },
     // Page sizes
     { 1 << 11, 1 << 12, 1 << 13, 1 << 14, 1 << 15, 1 << 16 },
     // Cache size
     { 128, 256, 512, 1024 },
-    // Compression 
-    { 0, 1, 2 }
 })->MinTime(2);
 
 BENCHMARK_MAIN ();
